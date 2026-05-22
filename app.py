@@ -1,4 +1,6 @@
 import io
+from pathlib import Path
+
 import joblib
 import pandas as pd
 import streamlit as st
@@ -23,12 +25,94 @@ st.markdown(
 )
 
 
+def find_file(possible_paths):
+    """
+    Mencari file dari beberapa kemungkinan lokasi.
+    Berguna karena file bisa berada di root repo atau di folder artifacts.
+    """
+    for path in possible_paths:
+        p = Path(path)
+        if p.exists():
+            return p
+    return None
+
+
 @st.cache_resource
 def load_artifacts():
-    content_items = pd.read_parquet("artifacts/content_items.parquet")
-    availability_summary = pd.read_parquet("artifacts/availability_summary.parquet")
-    tfidf_vectorizer = joblib.load("artifacts/tfidf_vectorizer.joblib")
-    tfidf_matrix = load_npz("artifacts/tfidf_matrix.npz")
+    # -----------------------------------------------------
+    # 1. Cari lokasi file content_items
+    # -----------------------------------------------------
+    content_path = find_file([
+        "artifacts/content_items.csv",
+        "content_items.csv",
+        "artifacts/content_items.parquet",
+        "content_items.parquet",
+    ])
+
+    availability_path = find_file([
+        "artifacts/availability_summary.csv",
+        "availability_summary.csv",
+        "artifacts/availability_summary.parquet",
+        "availability_summary.parquet",
+    ])
+
+    vectorizer_path = find_file([
+        "artifacts/tfidf_vectorizer.joblib",
+        "tfidf_vectorizer.joblib",
+    ])
+
+    matrix_path = find_file([
+        "artifacts/tfidf_matrix.npz",
+        "tfidf_matrix.npz",
+    ])
+
+    missing = []
+    if content_path is None:
+        missing.append("content_items.csv / content_items.parquet")
+    if availability_path is None:
+        missing.append("availability_summary.csv / availability_summary.parquet")
+    if vectorizer_path is None:
+        missing.append("tfidf_vectorizer.joblib")
+    if matrix_path is None:
+        missing.append("tfidf_matrix.npz")
+
+    if missing:
+        raise FileNotFoundError(
+            "File berikut belum ditemukan di repo: " + ", ".join(missing)
+        )
+
+    # -----------------------------------------------------
+    # 2. Load content_items
+    # -----------------------------------------------------
+    if content_path.suffix.lower() == ".parquet":
+        content_items = pd.read_parquet(content_path)
+    else:
+        content_items = pd.read_csv(content_path)
+
+    # -----------------------------------------------------
+    # 3. Load availability_summary
+    # -----------------------------------------------------
+    if availability_path.suffix.lower() == ".parquet":
+        availability_summary = pd.read_parquet(availability_path)
+    else:
+        availability_summary = pd.read_csv(availability_path)
+
+    # -----------------------------------------------------
+    # 4. Load TF-IDF artifacts
+    # -----------------------------------------------------
+    tfidf_vectorizer = joblib.load(vectorizer_path)
+    tfidf_matrix = load_npz(matrix_path)
+
+    # -----------------------------------------------------
+    # 5. Validasi jumlah baris
+    # -----------------------------------------------------
+    if len(content_items) != tfidf_matrix.shape[0]:
+        raise ValueError(
+            f"Jumlah baris content_items ({len(content_items)}) "
+            f"tidak sama dengan jumlah baris tfidf_matrix ({tfidf_matrix.shape[0]}). "
+            "Pastikan content_items.csv dan tfidf_matrix.npz dibuat dari proses yang sama."
+        )
+
     return content_items, availability_summary, tfidf_vectorizer, tfidf_matrix
 
 
@@ -36,13 +120,36 @@ try:
     content_items, availability_summary, tfidf_vectorizer, tfidf_matrix = load_artifacts()
 except Exception as e:
     st.error(f"Gagal memuat artefak model: {e}")
+
+    st.info(
+        """
+        Pastikan file berikut tersedia di root repo atau folder `artifacts/`:
+
+        - `content_items.csv`
+        - `availability_summary.csv`
+        - `tfidf_vectorizer.joblib`
+        - `tfidf_matrix.npz`
+        """
+    )
     st.stop()
 
 
 with st.sidebar:
     st.header("Pengaturan")
-    top_n = st.slider("Jumlah rekomendasi", min_value=5, max_value=20, value=10, step=1)
+    top_n = st.slider(
+        "Jumlah rekomendasi",
+        min_value=5,
+        max_value=20,
+        value=10,
+        step=1
+    )
+
     st.caption("Model menggunakan kemiripan teks preferensi dengan metadata dan sinopsis buku.")
+
+    st.divider()
+    st.write("**Status artefak:**")
+    st.write(f"Jumlah buku: {len(content_items):,}")
+    st.write(f"Ukuran TF-IDF: {tfidf_matrix.shape[0]:,} x {tfidf_matrix.shape[1]:,}")
 
 
 preference_text = st.text_area(
@@ -52,6 +159,7 @@ preference_text = st.text_area(
 )
 
 button = st.button("Cari Rekomendasi Buku", type="primary")
+
 
 if button:
     if not preference_text.strip():
@@ -77,7 +185,7 @@ if button:
 
     for _, row in recommendations.iterrows():
         with st.container(border=True):
-            st.subheader(f"{int(row['rank'])}. {row.get('title_raw', '-')}")
+            st.subheader(f"{int(row.get('rank', 0))}. {row.get('title_raw', '-')}")
             st.write(f"**Penulis:** {row.get('author_raw', '-')}")
             st.write(f"**Penerbit/Tahun:** {row.get('publisher', '-')} / {row.get('year_clean', '-')}")
             st.write(f"**Kategori/Klasifikasi:** {row.get('category', '-')} / {row.get('class_group', '-')}")
@@ -85,7 +193,7 @@ if button:
             st.write(f"**Alasan rekomendasi:** {row.get('explanation', '-')}")
 
             sinopsis = str(row.get("sinopsis", "")).strip()
-            if sinopsis:
+            if sinopsis and sinopsis.lower() not in ["nan", "none"]:
                 with st.expander("Lihat sinopsis"):
                     st.write(sinopsis)
 
@@ -128,5 +236,6 @@ if button:
         file_name="hasil_rekomendasi_buku.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 else:
     st.info("Isi preferensi buku, lalu klik tombol **Cari Rekomendasi Buku**.")
