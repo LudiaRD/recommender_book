@@ -124,6 +124,8 @@ def recommend_cold_user_by_preference_text(
         "category",
         "class_code",
         "class_group",
+        "call_number",
+        "access_type",
         "has_synopsis",
         "content_source_level",
         "sinopsis",
