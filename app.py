@@ -36,6 +36,96 @@ def find_file(possible_paths):
             return p
     return None
 
+def clean_display_value(value, default="-"):
+    """
+    Membersihkan nilai kosong, NaN, None, dan string 'nan'
+    agar tidak tampil di UI.
+    """
+    if value is None:
+        return default
+
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+
+    value = str(value).strip()
+
+    if value.lower() in ["", "nan", "none", "null", "<na>", "nat"]:
+        return default
+
+    if value.endswith(".0"):
+        try:
+            return str(int(float(value)))
+        except Exception:
+            return value
+
+    return value
+
+
+def get_ddc_group(class_code):
+    """
+    Mengubah kode DDC menjadi kelompok klasifikasi utama.
+    Contoh:
+    641.5 -> 600 - Ilmu Terapan
+    899.221 -> 800 - Sastra
+    """
+    code = clean_display_value(class_code, default="")
+    if code == "":
+        return "-"
+
+    digits = "".join([c for c in code if c.isdigit()])
+
+    if len(digits) < 3:
+        return "-"
+
+    try:
+        ddc = int(digits[:3])
+    except Exception:
+        return "-"
+
+    if 0 <= ddc <= 99:
+        return "000 - Karya Umum"
+    elif 100 <= ddc <= 199:
+        return "100 - Filsafat dan Psikologi"
+    elif 200 <= ddc <= 299:
+        return "200 - Agama"
+    elif 300 <= ddc <= 399:
+        return "300 - Ilmu Sosial"
+    elif 400 <= ddc <= 499:
+        return "400 - Bahasa"
+    elif 500 <= ddc <= 599:
+        return "500 - Ilmu Murni"
+    elif 600 <= ddc <= 699:
+        return "600 - Ilmu Terapan/Teknologi"
+    elif 700 <= ddc <= 799:
+        return "700 - Seni dan Rekreasi"
+    elif 800 <= ddc <= 899:
+        return "800 - Sastra"
+    elif 900 <= ddc <= 999:
+        return "900 - Sejarah dan Geografi"
+
+    return "-"
+
+
+def get_best_call_number(row):
+    """
+    Mengambil nomor panggil terbaik.
+    Prioritas:
+    1. call_number
+    2. class_code
+    """
+    call_number = clean_display_value(row.get("call_number", ""), default="")
+    class_code = clean_display_value(row.get("class_code", ""), default="")
+
+    if call_number != "":
+        return call_number
+
+    if class_code != "":
+        return class_code
+
+    return "-"
 
 @st.cache_resource
 def load_artifacts():
@@ -184,13 +274,30 @@ if button:
     st.success(f"Ditemukan {len(recommendations)} rekomendasi buku.")
 
     for _, row in recommendations.iterrows():
+        title = clean_display_value(row.get("title_raw", "-"))
+        author = clean_display_value(row.get("author_raw", "-"))
+        publisher = clean_display_value(row.get("publisher", "-"))
+        year = clean_display_value(row.get("year_clean", "-"))
+        category = clean_display_value(row.get("category", "-"))
+        class_code = clean_display_value(row.get("class_code", "-"))
+        class_group = clean_display_value(row.get("class_group", ""), default="")
+        call_number = get_best_call_number(row)
+
+        if class_group == "":
+            class_group = get_ddc_group(class_code)
+
+        copy_count = int(float(row.get("copy_count", 0) or 0))
+        explanation = clean_display_value(row.get("explanation", "-"))
         with st.container(border=True):
             st.subheader(f"{int(row.get('rank', 0))}. {row.get('title_raw', '-')}")
-            st.write(f"**Penulis:** {row.get('author_raw', '-')}")
-            st.write(f"**Penerbit/Tahun:** {row.get('publisher', '-')} / {row.get('year_clean', '-')}")
-            st.write(f"**Kategori/Klasifikasi:** {row.get('category', '-')} / {row.get('class_group', '-')}")
-            st.write(f"**Jumlah eksemplar:** {int(row.get('copy_count', 0))}")
-            st.write(f"**Alasan rekomendasi:** {row.get('explanation', '-')}")
+            st.write(f"**Penulis:** {author}")
+            st.write(f"**Penerbit/Tahun:** {publisher} / {year}")
+            st.write(f"**Nomor Panggil:** {call_number}")
+            st.write(f"**Kode DDC:** {class_code}")
+            st.write(f"**Kelompok Klasifikasi DDC:** {class_group}")
+            st.write(f"**Lokasi/Jenis Koleksi:** {category}")
+            st.write(f"**Jumlah Eksemplar:** {copy_count}")
+            st.write(f"**Alasan Rekomendasi:** {explanation}")
 
             sinopsis = str(row.get("sinopsis", "")).strip()
             if sinopsis and sinopsis.lower() not in ["nan", "none"]:
